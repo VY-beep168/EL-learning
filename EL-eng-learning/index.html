@@ -104,6 +104,9 @@ button{font:inherit;color:inherit;cursor:pointer;border:0}
 @keyframes popin{from{transform:scale(.3);opacity:0}to{transform:none;opacity:1}}
 .mcard.word{font-size:clamp(26px,5.2vh,56px)}
 .mcard.pic{font-size:clamp(40px,10.5vh,100px);line-height:1}
+/* Chinese cards (Traditional, HK glyphs). Size is set per card in JS (fitZh) so every term stays inside its card. */
+.mcard.zh{font-family:"PingFang HK","PingFang TC","Heiti TC","Noto Sans TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;font-weight:700;line-height:1.1;white-space:nowrap}
+.mcard.zh.stack{flex-direction:column}
 .mcard.sel{border-color:#4aa3ff;background:#e3f2ff;transform:scale(1.05)}
 .mcard.bad{animation:shake .45s both;border-color:var(--red);background:#ffe0e0}
 .mcard.ok{border-color:var(--green);background:#e5ffd9;pointer-events:none;box-shadow:0 3px 0 #4aa04a;transform:translateY(3px)}
@@ -359,6 +362,54 @@ const pictureWords = {
   ]
 };
 
+/* =====================================================================
+   CHINESE (Traditional) TERMS FOR "MATCH THE COLUMNS"
+   Edit Chinese here only. Keys = category -> English word (must match pictureWords).
+   A word listed here shows as a Chinese card on the right; a word NOT listed stays an emoji.
+   " / " = two accepted terms, shown stacked on one card (spoken with a short pause).
+   Source: terms in the WiseQ Chinese PDF where it has them; the rest are standard HK terms (unverified).
+   ===================================================================== */
+const MIX_CARD_TYPES_IN_ROUND = true;   // true: Chinese + emoji cards can share a round. false: each round is all-Chinese or all-emoji (falls back to mixing if too few words).
+const zhMap = {
+  "Body & Clothes": {            // body parts only; clothes stay emoji
+    eye:"眼睛", ear:"耳朵", hand:"手", foot:"腳", nose:"鼻子", mouth:"口",
+    tooth:"牙齒", arm:"手臂", leg:"腿", finger:"手指"
+  },
+  "Food & Drinks": {             // fruits + common foods/drinks; pea, onion, pizza, potato, tomato, carrot, burger stay emoji
+    apple:"蘋果", banana:"香蕉", watermelon:"西瓜", orange:"橙", mango:"芒果",
+    pear:"梨", grape:"葡萄", lemon:"檸檬", pineapple:"菠蘿", coconut:"椰子",
+    egg:"雞蛋", milk:"牛奶", rice:"飯", bread:"麵包", cheese:"芝士", juice:"果汁",
+    chocolate:"巧克力", "ice cream":"雪糕", cake:"蛋糕", meat:"肉", water:"水",
+    sausage:"香腸", chips:"薯條"
+  },
+  "School & Classroom": {        // keyboard stays emoji
+    book:"書", pen:"原子筆", pencil:"鉛筆", ruler:"尺子", school:"學校",
+    crayon:"顏色筆", eraser:"橡皮膠", student:"學生", teacher:"老師"
+  },
+  "People & Family": {           // baby stays emoji
+    dad:"爸爸", mum:"媽媽", boy:"男孩", girl:"女孩", friend:"朋友",
+    family:"家庭", grandpa:"爺爺 / 外公", grandma:"奶奶 / 外婆"
+  },
+  "Time of Day": {
+    morning:"早上", afternoon:"下午", evening:"晚上", night:"夜晚"
+  },
+  "Colours & Feelings": {        // colours only; hot/angry stay emoji
+    red:"紅色", blue:"藍色", green:"綠色", yellow:"黃色", orange:"橙色",
+    purple:"紫色", pink:"粉紅色", black:"黑色", white:"白色", brown:"啡色"
+  },
+  "Numbers": {
+    zero:"零", one:"一", two:"二", three:"三", four:"四", five:"五",
+    six:"六", seven:"七", eight:"八", nine:"九", ten:"十"
+  }
+};
+/* merge zhMap onto pictureWords entries as an optional `zh` field */
+(function applyZh(){
+  for(const cat of Object.keys(zhMap)){
+    const list = pictureWords[cat]; if(!list) continue;
+    for(const w of list){ if(zhMap[cat][w.word]) w.zh = zhMap[cat][w.word]; }
+  }
+})();
+
 const textWords = {
   "Core Words": [
     {word:"the",level:1},{word:"a",level:1},{word:"is",level:1},{word:"am",level:1},
@@ -457,10 +508,24 @@ const Levels = {
 };
 
 const Voice = {
-  on:true, voice:null, ctx:null,
+  on:true, voice:null, zhVoice:null, zhIsCantonese:false, ctx:null, ZH_RATE:0.55,
   init(){
     if(!("speechSynthesis" in window)) return;
+    const chooseZh=()=>{
+      const all=speechSynthesis.getVoices();
+      const yue=all.filter(v=>/^(zh[-_]HK|zh[-_]Hant[-_]HK|yue)/i.test(v.lang));   // Cantonese
+      const any=all.filter(v=>/^zh/i.test(v.lang));                                 // any Chinese (fallback)
+      const zfemale=/female|sinji|sin-ji|tracy|hiugaai|hiumaan|meijia|mei-jia|tingting|ting-ting|huihui|yaoyao|hanhan|yating|xiaoxiao/i;
+      const zmale=/\bmale\b|danny|wanlung|kangkang|yunyang|zhiwei|yunjhe|yunxi|yunjian/i;
+      const best=list=>{
+        const f=list.filter(v=>zfemale.test(v.name)&&!/\bmale\b/i.test(v.name.replace(/female/ig,""))&&!zmale.test(v.name));
+        return f[0] || list.filter(v=>!zmale.test(v.name))[0] || list[0] || null;
+      };
+      this.zhVoice = best(yue) || best(any);
+      this.zhIsCantonese = !!(this.zhVoice && yue.indexOf(this.zhVoice)>=0);
+    };
     const choose=()=>{
+      chooseZh();
       const vs=speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang));
       const female=/female|samantha|karen|moira|tessa|victoria|fiona|serena|zira|susan|hazel|kate|allison|ava|joelle|nicky|martha|catherine|sara|helen|linda|emma|amy|joanna|siri|libby|sonia|jenny|aria|natasha|olivia/i;
       const male=/male|daniel|alex|fred|david|mark|james|george|guy|ryan|thomas|arthur|oliver|aaron|gordon|rishi|lee|eddy|reed|ralph|rocko|evan|nathan|liam|brian|matthew|john|richard/i;
@@ -479,6 +544,34 @@ const Voice = {
       u.rate=rate; if(this.voice){u.voice=this.voice;u.lang=this.voice.lang;} else u.lang="en-US";
       speechSynthesis.speak(u);
     }catch(e){}
+  },
+  /* Chinese (Cantonese if the device has it). Silent if the device has no Chinese voice. " / " becomes a short pause. */
+  zhUtter(text){
+    if(!this.zhVoice) return null;
+    const u=new SpeechSynthesisUtterance(String(text).replace(/\s*\/\s*/g,"，"));
+    u.voice=this.zhVoice; u.lang=this.zhVoice.lang; u.rate=this.ZH_RATE; return u;
+  },
+  sayZh(text){
+    if(!this.on||!("speechSynthesis" in window)) return;
+    try{ const u=this.zhUtter(text); if(!u) return; speechSynthesis.cancel(); speechSynthesis.speak(u); }catch(e){}
+  },
+  /* English word, then its Chinese (queued one after the other) */
+  sayPair(en,zh,rate=0.5){
+    if(!this.on||!("speechSynthesis" in window)) return;
+    try{
+      speechSynthesis.cancel();
+      const e=new SpeechSynthesisUtterance(en);
+      e.rate=rate; if(this.voice){e.voice=this.voice;e.lang=this.voice.lang;} else e.lang="en-US";
+      speechSynthesis.speak(e);
+      const z=this.zhUtter(zh); if(z) speechSynthesis.speak(z);
+    }catch(err){}
+  },
+  /* shown in the settings box so you can see what this device actually picked */
+  status(){
+    if(!("speechSynthesis" in window)) return "No speech on this device";
+    const en=this.voice?this.voice.name:"device default";
+    const zh=!this.zhVoice ? "none found (Chinese cards stay silent)" : this.zhVoice.name+(this.zhIsCantonese?" (Cantonese)":" (not Cantonese)");
+    return `Voices - English: ${en} | Chinese: ${zh}`;
   },
   /* soft, friendly chimes only — never harsh */
   chime(notes=[660,880],dur=.14){
@@ -576,6 +669,7 @@ const Hub = {
       <div>Which words should this game use?</div>
       <select>${opts.map(o=>`<option value="${o.pool}|${o.cat}" ${o.pool===cur.pool&&o.cat===cur.cat?"selected":""}>${Bank.label(o)}</option>`).join("")}</select>
       ${m.needsPics?"<small>This game needs pictures, so only picture categories are listed.</small>":""}
+      <small id="voiceinfo">${Voice.status()}</small>
       <button class="done">Done ✔</button></div>`;
     document.body.appendChild(wrap);
     wrap.querySelector(".done").onclick=()=>{
@@ -671,16 +765,44 @@ Games.match = { start(stage){
   function round(){
     if(!alive) return;
     const a=Store.assignment(gid), lv=Levels.get(gid,a).level;
-    items=shuffle(Bank.words(a,lv,PAIRS)).slice(0,PAIRS);
+    let pool=Bank.words(a,lv,PAIRS);
+    if(!MIX_CARD_TYPES_IN_ROUND){
+      /* one card type per round, unless there aren't enough words of a single type at this level */
+      const zhG=pool.filter(w=>w.zh), emG=pool.filter(w=>!w.zh);
+      const ok=[zhG,emG].filter(g=>g.length>=PAIRS);
+      if(ok.length) pool=pick(ok);
+    }
+    items=shuffle(pool).slice(0,PAIRS);
     const rightOrder=shuffle(items);
     tainted=new Set(); L.innerHTML=R.innerHTML=svg.innerHTML=""; matched=0; selL=selR=null; locked=false; done=[];
     leftCards=items.map((w,i)=>{
       const c=document.createElement("button"); c.className="mcard word"; c.style.setProperty("--i",i);
       c.textContent=w.word; fitText(c,w.word,4.7); c.onclick=()=>tapL(i); L.appendChild(c); return c; });
     rightCards=rightOrder.map((w,i)=>{
-      const c=document.createElement("button"); c.className="mcard pic"; c.style.setProperty("--i",i+.5);
-      c.textContent=w.emoji; c.onclick=()=>tapR(i); R.appendChild(c); return c; });
+      const c=document.createElement("button"); c.style.setProperty("--i",i+.5);
+      if(w.zh){
+        const lines=w.zh.split(/\s*\/\s*/);
+        c.className="mcard pic zh"+(lines.length>1?" stack":""); c.lang="zh-HK";
+        c.innerHTML=lines.map(t=>`<span>${t}</span>`).join("");
+        c.dataset.zh=w.zh;
+      } else { c.className="mcard pic"; c.textContent=w.emoji; }
+      c.onclick=()=>tapR(i); R.appendChild(c); return c; });
     items.rightOrder=rightOrder;
+    fitAllZh();
+  }
+
+  /* Chinese text: as large as fits on one line per term, never wrapped */
+  function fitZh(c){
+    const lines=c.dataset.zh.split(/\s*\/\s*/), n=lines.length;
+    const availW=c.clientWidth-28, availH=c.clientHeight-28;
+    if(availW<=0||availH<=0) return;
+    const maxChars=Math.max(...lines.map(t=>t.length));
+    const size=Math.max(16, Math.min(availW/maxChars, (availH/n)/1.15, availH*0.8));
+    c.style.fontSize=size+"px";
+  }
+  function fitAllZh(){
+    const go=()=>rightCards.forEach(c=>{ if(c.dataset.zh) fitZh(c); });
+    go(); requestAnimationFrame(go);   // second pass once layout has settled
   }
 
   const clearSel=()=>{ leftCards.forEach(c=>c.classList.remove("sel")); rightCards.forEach(c=>c.classList.remove("sel")); selL=selR=null; };
@@ -693,7 +815,8 @@ Games.match = { start(stage){
   function tapR(j){
     if(locked||rightCards[j].classList.contains("ok")) return;
     if(selR===j){ rightCards[j].classList.remove("sel"); selR=null; return; }
-    Voice.say(items.rightOrder[j].word);
+    const rw=items.rightOrder[j];
+    if(rw.zh) Voice.sayZh(rw.zh); else Voice.say(rw.word);
     rightCards.forEach(c=>c.classList.remove("sel")); selR=j; rightCards[j].classList.add("sel"); check();
   }
 
@@ -706,6 +829,7 @@ Games.match = { start(stage){
       leftCards[i].classList.add("ok"); rightCards[j].classList.add("ok");
       done.push({i,j,color:COLORS[matched%COLORS.length]}); drawLines(true);
       FX.confettiAt(rightCards[j],12); FX.hop(); Voice.chime([660,880]);
+      if(items.rightOrder[j].zh) Voice.sayPair(items[i].word, items.rightOrder[j].zh);   // English, then Chinese
       matched++; selL=selR=null;
       if(!tainted.has(items[i].word)) Score.right(gid);
       if(matched===PAIRS){
@@ -734,7 +858,7 @@ Games.match = { start(stage){
       svg.appendChild(ln);
     });
   }
-  const onResize=()=>drawLines(false);
+  const onResize=()=>{ fitAllZh(); drawLines(false); };
   addEventListener("resize",onResize);
 
   round();
