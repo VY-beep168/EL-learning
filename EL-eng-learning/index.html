@@ -81,6 +81,10 @@ button{font:inherit;color:inherit;cursor:pointer;border:0}
   display:flex;align-items:center;justify-content:center;text-align:center;font-weight:bold;padding:6px;overflow:hidden;
   animation:flyup .8s cubic-bezier(.2,1.3,.4,1) both;animation-delay:calc(var(--i)*.13s)}
 @keyframes flyup{from{transform:translateY(90vh) rotate(calc((var(--i) - 1)*14deg));opacity:0}to{transform:none;opacity:1}}
+.wcard.zh{font-family:"PingFang HK","PingFang TC","Heiti TC","Noto Sans TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;font-weight:700;line-height:1.1;white-space:nowrap}
+.wcard.zh.stack{flex-direction:column}
+.fcard.zh{font-family:"PingFang HK","PingFang TC","Heiti TC","Noto Sans TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;font-weight:700;line-height:1.1;white-space:nowrap}
+.fcard.zh.stack{flex-direction:column}
 .wcard.wrong{animation:shake .45s both;background:#e3e3e3;border-color:#bbb;color:#999;box-shadow:0 3px 0 #aaa;pointer-events:none}
 .wcard.win{animation:pulse .6s both;background:#e5ffd9;border-color:var(--green)}
 .wcard.gone{opacity:0;transform:scale(.6);transition:all .4s}
@@ -369,8 +373,23 @@ const pictureWords = {
    " / " = two accepted terms, shown stacked on one card (spoken with a short pause).
    Source: terms in the WiseQ Chinese PDF where it has them; the rest are standard HK terms (unverified).
    ===================================================================== */
-const MIX_CARD_TYPES_IN_ROUND = true;   // true: Chinese + emoji cards can share a round. false: each round is all-Chinese or all-emoji (falls back to mixing if too few words).
+/* ---- LISTEN-AND-PICK settings (Word Catch, Horse Race, Feed the Horse) ----
+   Levels here are a PROGRESS counter, not a word filter: every round draws from the WHOLE category (the old "level 3" words),
+   and the level goes up by 1 every LEVEL_UP_EVERY correct answers (wrong answers never lower it), up to LEVEL_CAP.
+   CHINESE_SHARE: chance a round is a Chinese round (all cards Chinese, word spoken in Cantonese). Other rounds are all English.
+     A Chinese round needs enough Chinese words in the category AND a Chinese voice on the device.
+   English rounds put cards with the SAME FIRST LETTER together whenever the category has them. */
+const FLAT_GAMES = ["catch","race","feed"];
+const LEVEL_UP_EVERY = 3, LEVEL_CAP = 10;
+const CHINESE_SHARE = 0.5;
+const MIX_CARD_TYPES_IN_ROUND = true;   // Match the Columns: true = Chinese + emoji cards can share a round. false = each round is all-Chinese or all-emoji.
 const zhMap = {
+  "Animals": {                   // PDF terms: 雞 鴨 馬 豬 牛 羊 青蛙 猴子 長頸鹿 大象 老虎 鱷魚 魚 狗 貓 小兔 蛇 小鳥. NOT in the PDF (standard HK terms, unverified): goat 山羊, mouse 老鼠, hippo 河馬, lizard 蜥蜴, spider 蜘蛛, polar bear 北極熊
+    dog:"狗", cat:"貓", cow:"牛", pig:"豬", fish:"魚", bird:"小鳥", frog:"青蛙", goat:"山羊",
+    duck:"鴨", horse:"馬", tiger:"老虎", sheep:"羊", mouse:"老鼠", snake:"蛇", rabbit:"小兔",
+    hippo:"河馬", lizard:"蜥蜴", monkey:"猴子", chicken:"雞", elephant:"大象", giraffe:"長頸鹿",
+    crocodile:"鱷魚", spider:"蜘蛛", "polar bear":"北極熊"
+  },
   "Body & Clothes": {            // body parts only; clothes stay emoji
     eye:"眼睛", ear:"耳朵", hand:"手", foot:"腳", nose:"鼻子", mouth:"口",
     tooth:"牙齒", arm:"手臂", leg:"腿", finger:"手指"
@@ -447,10 +466,10 @@ const textWords = {
 const GAME_META = [
   {id:"catch", name:"Word Catch",       icon:"🧺", needsPics:false, def:{pool:"picture",cat:"Animals"}},
   {id:"match", name:"Match the Columns",icon:"🔗", needsPics:true,  def:{pool:"picture",cat:"Food & Drinks"}},
-  {id:"race",  name:"Horse Race",       icon:"🏇", needsPics:false, def:{pool:"text",   cat:"Core Words"}},
+  {id:"race",  name:"Horse Race",       icon:"🏇", needsPics:false, def:{pool:"picture",cat:"Colours & Feelings"}},
   {id:"bingo", name:"Word Bingo",       icon:"🎟️", needsPics:false, def:{pool:"picture",cat:"Body & Clothes"}},
   {id:"whack", name:"Whack-a-Word",     icon:"🔨", needsPics:false, def:{pool:"picture",cat:"Transport & Places"}},
-  {id:"feed",  name:"Feed the Horse",   icon:"🥕", needsPics:false, def:{pool:"picture",cat:"Sports, Toys & Hobbies"}}
+  {id:"feed",  name:"Feed the Horse",   icon:"🥕", needsPics:false, def:{pool:"picture",cat:"Food & Drinks"}}
 ];
 const Games = {};   // id -> { start(stage) -> cleanupFn }   (filled in below)
 
@@ -494,17 +513,22 @@ const Store = {
 
 const Levels = {
   MAX:3, NEED:5,
-  key:(gid,a)=>gid+"|"+a.pool+"|"+a.cat,
-  get(gid,a){ const k=this.key(gid,a); return Store.d.prog[k] || (Store.d.prog[k]={level:1,streak:0}); },
+  key:(gid,a)=>gid+"|"+a.pool+"|"+a.cat+(FLAT_GAMES.includes(gid)?"|v2":""),
+  FLAT:Object.fromEntries(FLAT_GAMES.map(g=>[g,1])),   // progress-counter games (see settings above)
+  get(gid,a){
+    const k=this.key(gid,a), p=Store.d.prog[k] || (Store.d.prog[k]={level:1,streak:0});
+    return p;
+  },
   /* returns true if this answer unlocked a new level */
   correct(gid,a){
     const p=this.get(gid,a); p.streak++;
     let up=false;
+    if(this.FLAT[gid]){ if(p.streak>=LEVEL_UP_EVERY){ p.streak=0; if(p.level<LEVEL_CAP){ p.level++; up=true; } } Store.save(); return up; }
     if(p.streak>=this.NEED){ p.streak=0; if(p.level<this.MAX){ p.level++; up=true; } }
     Store.save(); return up;
   },
-  wrong(gid,a){ this.get(gid,a).streak=0; Store.save(); },
-  label(gid,a){ const p=this.get(gid,a); return p.level>=this.MAX ? `Level ${p.level} ⭐ ${p.streak}/${this.NEED}` : `Level ${p.level} · ${p.streak}/${this.NEED}`; }
+  wrong(gid,a){ if(this.FLAT[gid]) return; this.get(gid,a).streak=0; Store.save(); },
+  label(gid,a){ const p=this.get(gid,a); if(this.FLAT[gid]) return p.level>=LEVEL_CAP ? `Level ${p.level} ⭐` : `Level ${p.level} · ${p.streak}/${LEVEL_UP_EVERY}`; return p.level>=this.MAX ? `Level ${p.level} ⭐ ${p.streak}/${this.NEED}` : `Level ${p.level} · ${p.streak}/${this.NEED}`; }
 };
 
 const Voice = {
@@ -689,21 +713,24 @@ const Hub = {
 Games.catch = { start(stage){
   const gid="catch", T=makeTimers(); let alive=true;
   const JAR_MAX=8, PINATA_TAPS=5;
-  let jar=0, target=null, last=null, wrongThisRound=false, locked=false;
+  let jar=0, target=null, last=null, wrongThisRound=false, locked=false, isZh=false;
 
   stage.innerHTML=`<div class="catch">
     <div class="jarwrap"><div class="jl">🍬</div><div class="jar"><div class="fill"></div></div><div class="cnt"></div></div>
     <div class="catch-main"><button id="repeat" aria-label="Hear the word again">🔊</button><div id="cards"></div></div>
   </div>`;
   const cards=stage.querySelector("#cards"), fill=stage.querySelector(".fill"), cnt=stage.querySelector(".cnt");
-  stage.querySelector("#repeat").onclick=()=>target&&Voice.say(target.word,SLOW);
+  stage.querySelector("#repeat").onclick=()=>{ if(!target) return; isZh ? Voice.sayZh(target.zh) : Voice.say(target.word,SLOW); };
+  const onResize=()=>refitZh(cards);
+  addEventListener("resize",onResize);
 
   function drawJar(){ fill.style.height=(jar/JAR_MAX*100)+"%"; cnt.textContent=`${jar}/${JAR_MAX}`; }
 
   function round(){
     if(!alive) return;
     wrongThisRound=false; locked=false;
-    last=target=dealChoices(gid,cards,T,last,tap);
+    const r=dealChoices(gid,cards,T,last,tap);
+    last=target=r.target; isZh=r.zh;
   }
 
   function tap(card,w){
@@ -747,8 +774,60 @@ Games.catch = { start(stage){
   }
 
   drawJar(); round();
-  return ()=>{ alive=false; T.clear(); };
+  return ()=>{ alive=false; T.clear(); removeEventListener("resize",onResize); };
 }};
+
+/* Shared dealer for Word Catch / Horse Race / Feed the Horse.
+   One round = n cards that are ALL English or ALL Chinese. English rounds prefer distractors with the same first letter. */
+function fitZhCard(c){
+  const lines=c.dataset.zh.split(/\s*\/\s*/), k=lines.length;
+  const availW=c.clientWidth-40, availH=c.clientHeight-40;       // minus border + padding
+  if(availW<=0||availH<=0) return;
+  const maxChars=Math.max(...lines.map(t=>t.length));
+  c.style.fontSize=Math.max(16, Math.min(availW/maxChars, (availH/k)/1.15, availH*0.75))+"px";
+}
+function dealRound(gid,n,prev){
+  const {a,pool}=wordPool(gid,n);
+  const zhPool=pool.filter(w=>w.zh);
+  const zh=!!Voice.zhVoice && zhPool.length>=n && Math.random()<CHINESE_SHARE;
+  const src=zh?zhPool:pool;
+  const fl=w=>w.word[0].toLowerCase();
+  const mates=w=>src.filter(x=>x.word!==w.word && fl(x)===fl(w));
+  const cand=src.filter(w=>!(prev && src.length>1 && w.word===prev.word));
+  let c2=cand;
+  if(!zh){
+    c2=cand.filter(w=>mates(w).length>=n-1);
+    if(!c2.length || Math.random()<0.3) c2=cand.filter(w=>mates(w).length>=1);
+    if(!c2.length) c2=cand;
+  }
+  const t=pick(c2);
+  let others=(zh?shuffle(src.filter(w=>w.word!==t.word)):shuffle(mates(t))).slice(0,n-1);
+  const fill=from=>{ const have=new Set([t.word,...others.map(o=>o.word)]);
+    others=others.concat(shuffle(from.filter(w=>!have.has(w.word))).slice(0,n-1-others.length)); };
+  if(others.length<n-1) fill(src);
+  if(others.length<n-1) fill(Bank.pools()[a.pool][a.cat]);
+  return {a, target:t, cards:shuffle([t,...others]), zh};
+}
+function zhCardInner(el,w){      // turn a card element into a Chinese card
+  const lines=w.zh.split(/\s*\/\s*/), base=el.classList.contains("fcard")?"fcard":"wcard";
+  el.classList.add("zh"); if(lines.length>1) el.classList.add("stack");
+  el.lang="zh-HK"; el.dataset.zh=w.zh; el.innerHTML=lines.map(x=>`<span>${x}</span>`).join("");
+}
+const sayTarget=(t,zh)=> zh ? Voice.sayZh(t.zh) : Voice.say(t.word,SLOW);
+const refitZh=root=>root.querySelectorAll(".zh[data-zh]").forEach(fitZhCard);
+/* 3 .wcard buttons (Word Catch, Horse Race) */
+function dealChoices(gid,cardsEl,T,prev,onTap){
+  const r=dealRound(gid,3,prev);
+  cardsEl.innerHTML="";
+  r.cards.forEach((w,i)=>{
+    const c=document.createElement("button"); c.className="wcard"; c.style.setProperty("--i",i);
+    if(r.zh) zhCardInner(c,w); else { c.textContent=w.word; fitText(c,w.word,6.8); }
+    c.onclick=()=>onTap(c,w); cardsEl.appendChild(c);
+  });
+  if(r.zh){ const go=()=>refitZh(cardsEl); go(); requestAnimationFrame(go); }
+  T.later(()=>sayTarget(r.target,r.zh),550);
+  return {target:r.target, zh:r.zh};
+}
 
 /* =====================================================================
    GAME 2 — MATCH THE COLUMNS
@@ -873,38 +952,26 @@ const Score = {   // single place that talks to the level system for games 3-6
   right(gid){ const up=Levels.correct(gid,Store.assignment(gid)); Hub.hud(); if(up) FX.banner("Level up! 🌟"); },
   miss(gid){ Levels.wrong(gid,Store.assignment(gid)); Hub.hud(); }
 };
-function wordPool(gid,min){ const a=Store.assignment(gid); return {a, pool:Bank.words(a,Levels.get(gid,a).level,min)}; }
-/* deal 3 text cards (1 target + 2 distractors), speak the target; used by Word Catch & Horse Race */
-function dealChoices(gid,cardsEl,T,prev,onTap){
-  const {a,pool}=wordPool(gid,3);
-  let t; do{ t=pick(pool); }while(pool.length>1 && prev && t.word===prev.word);
-  let others=shuffle(pool.filter(w=>w.word!==t.word)).slice(0,2);
-  if(others.length<2){ const all=Bank.pools()[a.pool][a.cat]; others=shuffle(all.filter(w=>w.word!==t.word)).slice(0,2); }
-  cardsEl.innerHTML="";
-  shuffle([t,...others]).forEach((w,i)=>{
-    const c=document.createElement("button"); c.className="wcard"; c.style.setProperty("--i",i);
-    c.textContent=w.word; fitText(c,w.word,6.8); c.onclick=()=>onTap(c,w); cardsEl.appendChild(c);
-  });
-  T.later(()=>Voice.say(t.word,SLOW),550);
-  return t;
-}
-
+function wordPool(gid,min){ const a=Store.assignment(gid); return {a, pool:Bank.words(a, Levels.FLAT[gid]?99:Levels.get(gid,a).level, min)}; }
 /* =====================================================================
    GAME 3 — HORSE RACE
    ===================================================================== */
 Games.race = { start(stage){
   const gid="race", T=makeTimers(); let alive=true;
-  const STEPS=8; let step=0, target=null, last=null, wrongThisRound=false, locked=false;
+  const STEPS=8; let step=0, target=null, last=null, wrongThisRound=false, locked=false, isZh=false;
   stage.innerHTML=`<div class="race">
     <div class="track"><div class="finish">🏁</div><div class="runner"><span>🏇</span></div></div>
     <div class="race-row"><button class="rowbtn" id="repeat" aria-label="Hear the word again">🔊</button><div id="cards"></div></div></div>`;
   const cards=stage.querySelector("#cards"), runner=stage.querySelector(".runner"), track=stage.querySelector(".track");
-  stage.querySelector("#repeat").onclick=()=>target&&Voice.say(target.word,SLOW);
+  stage.querySelector("#repeat").onclick=()=>target&&sayTarget(target,isZh);
+  const onResize=()=>refitZh(cards);
+  addEventListener("resize",onResize);
 
   function round(){
     if(!alive) return;
     wrongThisRound=false; locked=false;
-    last=target=dealChoices(gid,cards,T,last,tap);
+    const r=dealChoices(gid,cards,T,last,tap);
+    last=target=r.target; isZh=r.zh;
   }
   function tap(card,w){
     if(locked) return;
@@ -926,7 +993,7 @@ Games.race = { start(stage){
     } else T.later(round,1400);
   }
   round();
-  return ()=>{ alive=false; T.clear(); };
+  return ()=>{ alive=false; T.clear(); removeEventListener("resize",onResize); };
 }};
 
 /* =====================================================================
@@ -1057,7 +1124,7 @@ Games.whack = { start(stage){
    ===================================================================== */
 Games.feed = { start(stage){
   const gid="feed", T=makeTimers(); let alive=true;
-  const N=6; let target=null, last=null, sel=null, items=[], cardEls=[], wrongThisRound=false, locked=false;
+  const N=6; let target=null, last=null, sel=null, items=[], cardEls=[], wrongThisRound=false, locked=false, isZh=false;
   stage.innerHTML=`<div class="feed"><div class="pasture"></div>
     <div class="stable"><button class="rowbtn" id="repeat" aria-label="Hear the word again">🔊</button>
       <button id="horse" aria-label="Feed the horse"><svg viewBox="0 0 300 300" aria-hidden="true">
@@ -1098,24 +1165,27 @@ Games.feed = { start(stage){
   </g></g>
 </svg></button><div class="hint">Tap a card, then tap me!</div></div></div>`;
   const pasture=stage.querySelector(".pasture"), horse=stage.querySelector("#horse");
-  stage.querySelector("#repeat").onclick=()=>target&&Voice.say(target.word,SLOW);
+  stage.querySelector("#repeat").onclick=()=>target&&sayTarget(target,isZh);
+  const onResize=()=>refitZh(pasture);
+  addEventListener("resize",onResize);
   horse.onclick=feed;
   const anim=(el,cls)=>{ el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
 
   function round(){
     if(!alive) return;
-    const {pool}=wordPool(gid,N);
-    items=shuffle(pool).slice(0,N);
-    do{ target=pick(items); }while(items.length>1 && last && target.word===last.word);
+    const r=dealRound(gid,N,last);
+    items=r.cards; target=r.target; isZh=r.zh;
     last=target; sel=null; wrongThisRound=false; locked=false; pasture.innerHTML="";
     cardEls=items.map((w,i)=>{
       const slot=document.createElement("div"); slot.className="slot";
       const c=document.createElement("button"); c.className="fcard"; c.style.setProperty("--i",i);
       c.style.setProperty("--tx",((Math.random()*8-4)|0)+"%"); c.style.setProperty("--ty",((Math.random()*10-5)|0)+"%");
       c.style.setProperty("--r",((Math.random()*10-5)|0)+"deg");
-      c.textContent=w.word; fitText(c,w.word,4.7); c.onclick=()=>pickCard(i);
+      if(isZh) zhCardInner(c,w); else { c.textContent=w.word; fitText(c,w.word,4.7); }
+      c.onclick=()=>pickCard(i);
       slot.appendChild(c); pasture.appendChild(slot); return c; });
-    T.later(()=>Voice.say(target.word,SLOW),600);
+    if(isZh){ const go=()=>refitZh(pasture); go(); requestAnimationFrame(go); }
+    T.later(()=>sayTarget(target,isZh),600);
   }
   function pickCard(i){
     if(locked) return;
@@ -1143,7 +1213,7 @@ Games.feed = { start(stage){
     T.later(round,2400);
   }
   round();
-  return ()=>{ alive=false; T.clear(); };
+  return ()=>{ alive=false; T.clear(); removeEventListener("resize",onResize); };
 }};
 
 Hub.init();
